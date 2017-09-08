@@ -1,0 +1,142 @@
+/*
+ *  Copyright (c) 2015 by Alcatel-Lucent and shekhar, Inc. All rights reserved.
+ *
+ *  CONFIDENTIAL. All rights reserved. This computer program is
+ *  protected under Copyright. Recipient is to retain the program in
+ *  confidence, and is not permitted to copy, use, distribute, modify or
+ *  translate the program without authorization
+ *
+ *  @author Sangala Shekhar REddy
+ *
+ *  $Header$
+ */
+
+package com.shekhar.mas.configuration.service.api;
+
+/*
+ * Applications needing asynchronous notification of changes should implement this
+ * and register with ConfigurationService.
+ */
+
+import org.apache.curator.framework.recipes.cache.TreeCacheEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.DelayQueue;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.TimeUnit;
+
+public class TimeDelayedNodeListener {
+
+    private static final Logger log = LoggerFactory.getLogger(TimeDelayedNodeListener.class);
+    private long notificationDelay;
+    public static final long QUEUE_TIMEOUT = 10000;
+    private DelayQueue<DelayElement> queue = new DelayQueue<DelayElement>();
+    private boolean working = true;
+    private String pathName;
+    private NodeListener nodeListener;
+
+    /**
+     * 
+     * @param pathName
+     * @param nodeListener
+     * @param notificationDelay
+     */
+    public TimeDelayedNodeListener(String pathName, NodeListener nodeListener, long notificationDelay) {
+        this.pathName = pathName;
+        this.nodeListener = nodeListener;
+        this.notificationDelay = notificationDelay;
+    }
+
+    private DelayElement currentDelayElement;
+
+    /**
+     * 
+     */
+    public void start() {
+        Thread thread = new Thread(() -> {
+            while (working) {
+                try {
+                    if (queue.poll(QUEUE_TIMEOUT, TimeUnit.MILLISECONDS) != null) {
+                        nodeListener.callBack(pathName);
+                    }
+                } catch (InterruptedException e) {
+                    log.error(e.getMessage(), e);
+                }
+            }
+        });
+        thread.start();
+    }
+
+    /**
+     * 
+     * @param treeCacheEvent
+     */
+    public synchronized void insertEvent(TreeCacheEvent treeCacheEvent) {
+        if (currentDelayElement != null) {
+            queue.remove(currentDelayElement);
+        }
+        currentDelayElement = new DelayElement(treeCacheEvent, notificationDelay);
+        queue.put(currentDelayElement);
+    }
+
+    /**
+     * 
+     * @author ccayirog
+     *
+     */
+    private class DelayElement implements Delayed {
+        private TreeCacheEvent element;
+        private long expiryTime;
+
+        /**
+         * 
+         * @param element
+         * @param delay
+         */
+        public DelayElement(TreeCacheEvent element, long delay) {
+            this.element = element;
+            this.expiryTime = System.currentTimeMillis() + delay;
+        }
+
+        /**
+         * 
+         */
+        @Override
+        public long getDelay(TimeUnit timeUnit) {
+            long diff = expiryTime - System.currentTimeMillis();
+            return timeUnit.convert(diff, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * 
+         */
+        @Override
+        public int compareTo(Delayed o) {
+            if (this.expiryTime < ((DelayElement) o).expiryTime) {
+                return -1;
+            }
+            if (this.expiryTime > ((DelayElement) o).expiryTime) {
+                return 1;
+            }
+            return 0;
+        }
+
+        /**
+         * 
+         */
+        @Override
+        public String toString() {
+            return element + ": " + expiryTime;
+        }
+    }
+
+    /**
+     * 
+     */
+    public void stop() {
+    	log.debug("TimeDelayedNodeListener stop() thread...");
+        this.working = false;
+    }
+
+}
